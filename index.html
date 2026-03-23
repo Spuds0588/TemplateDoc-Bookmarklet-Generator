@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TemplateDoc Bookmarklet Generator</title>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <!-- Jodit Editor -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jodit/3.24.2/jodit.min.css"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jodit/3.24.2/jodit.min.js"></script>
+  
+  <style>
+    body { background-color: #f4f6f8; font-family: 'Inter', sans-serif; min-height: 100vh; display: flex; flex-direction: column; }
+    .hero.is-primary { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+    .page-view { display: none; }
+    .page-view.is-active { display: block; animation: fadeIn 0.3s ease-in-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    
+    .document-editor-container {
+      background: white;
+      width: 100%;
+      max-width: 816px; /* 8.5 inches approx */
+      margin: 0 auto;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+      padding: 1in; /* Standard 1in US Letter Margin padding wrapper so WYSIWYG renders correctly */
+      position: relative;
+    }
+    
+    /* Overriding Jodit UI internals slightly to feel more like a document editor */
+    .jodit-container:not(.jodit_inline) { border: none !important; }
+    .jodit-toolbar__box { border-bottom: 1px solid #eee !important; background: white !important; }
+    .jodit-wysiwyg { padding: 0 !important; font-size: 16px; font-family: 'Times New Roman', serif; min-height: 800px !important; }
+    
+    .variable-card {
+      background: white;
+      border: 1px solid #eee;
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 10px;
+      transition: all 0.2s ease;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .variable-card:hover { transform: translateY(-2px); box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-color: #4facfe; }
+    .var-syntax { background: #f5f5f5; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 0.85em; cursor: pointer; color: #e83e8c;}
+    .var-syntax:hover { background: #e83e8c; color: white; }
+    
+    .btn-create { box-shadow: 0 4px 15px rgba(79,172,254,0.4); }
+    
+    /* Export view styles */
+    .export-area { font-family: monospace; font-size: 14px; resize: none; width: 100%; height: 300px; padding: 15px; border-color: #ddd; }
+    .bookmark-drag { display: inline-block; padding: 15px 30px; background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); color: white !important; border-radius: 50px; font-weight: bold; text-decoration: none; font-size: 1.2rem; cursor: grab; box-shadow: 0 10px 20px rgba(56,239,125,0.4); transition: transform 0.2s; }
+    .bookmark-drag:hover { transform: scale(1.05); }
+    .bookmark-drag:active { cursor: grabbing; }
+
+    .empty-state { padding: 4rem; text-align: center; color: #888; }
+    .empty-state i { font-size: 4rem; margin-bottom: 1rem; color: #ccc; }
+  </style>
+</head>
+<body>
+
+  <nav class="navbar is-dark" role="navigation" aria-label="main navigation">
+    <div class="navbar-brand">
+      <a class="navbar-item" href="#" onclick="switchView('dashboard')">
+        <strong><i class="fa-solid fa-file-signature"></i> TemplateDoc Generator</strong>
+      </a>
+    </div>
+  </nav>
+
+  <!-- DASHBOARD VIEW -->
+  <div id="view-dashboard" class="page-view is-active container mt-5">
+    <div class="level">
+      <div class="level-left">
+        <h1 class="title">My Templates</h1>
+      </div>
+      <div class="level-right">
+        <button class="button is-primary btn-create" onclick="createNewTemplate()">
+          <span class="icon"><i class="fa-solid fa-plus"></i></span>
+          <span>New Template</span>
+        </button>
+      </div>
+    </div>
+    <div class="box p-0 mt-4" style="overflow: hidden;">
+      <table class="table is-fullwidth is-hoverable mb-0">
+        <thead class="has-background-light">
+          <tr>
+            <th>Name</th>
+            <th>Variables</th>
+            <th>Last Updated</th>
+            <th class="has-text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="dashboard-table-body">
+          <!-- Populated by JS -->
+        </tbody>
+      </table>
+      <div id="dashboard-empty" class="empty-state is-hidden">
+        <i class="fa-solid fa-folder-open"></i>
+        <p>No templates found. Create one to get started!</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- BUILDER VIEW -->
+  <div id="view-builder" class="page-view mt-0" style="background:#f4f6f8;">
+    <div class="has-background-white p-3 shadow-sm mb-4" style="border-bottom:1px solid #ddd; position:sticky; top:0; z-index:20;">
+      <div class="container level">
+        <div class="level-left">
+          <input class="input is-large title mb-0" type="text" id="template-name" placeholder="Template Name" style="border:none; box-shadow:none; padding-left:0;">
+        </div>
+        <div class="level-right">
+          <button class="button is-light mr-2" onclick="switchView('dashboard')">Back</button>
+          <button class="button is-info mr-2" onclick="previewTemplate()">Preview</button>
+          <button class="button is-success" onclick="goToExport()">Generate Bookmarklet</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="container" style="max-width: 1400px;">
+      <div class="columns">
+        <!-- LEFT PANEL: VARIABLES -->
+        <div class="column is-3">
+          <div class="box">
+            <h2 class="subtitle">Variables</h2>
+            <form id="add-var-form" class="mb-4">
+              <div class="field has-addons">
+                <div class="control is-expanded">
+                  <input class="input" type="text" id="new-var-name" placeholder="Name (e.g. Borrower)" required pattern="^[a-zA-Z0-9_]+$">
+                </div>
+              </div>
+              <div class="field">
+                <div class="control">
+                  <div class="select is-fullwidth">
+                    <select id="new-var-type">
+                      <option value="text">Short Text</option>
+                      <option value="longtext">Long Text</option>
+                      <option value="date">Date</option>
+                      <option value="signature">Signature (Modal)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+              <button class="button is-info is-fullwidth is-outlined" type="submit">Add Variable</button>
+              <p class="help">Alphanumeric names only, no spaces.</p>
+            </form>
+            
+            <hr>
+            <div id="variables-list">
+              <!-- Rendered variables -->
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT PANEL: EDITOR -->
+        <div class="column is-9">
+          <div class="document-editor-container">
+            <!-- Jodit Editor Container -->
+            <textarea id="jodit-editor"></textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EXPORT VIEW -->
+  <div id="view-export" class="page-view container mt-6">
+    <div class="box has-text-centered p-6">
+      <h1 class="title is-2 mb-6">Your Bookmarklet is Ready!</h1>
+      <p class="subtitle mb-6">Drag the button below directly into your browser's bookmarks bar.</p>
+      
+      <a href="#" id="bookmarklet-link" class="bookmark-drag mb-6" title="Drag me to your bookmarks bar!">
+        <i class="fa-solid fa-bookmark mr-2"></i> <span id="bookmarklet-name">Generate Doc</span>
+      </a>
+
+      <hr>
+
+      <div class="has-text-left mt-5">
+        <h3 class="title is-5">Manual Setup</h3>
+        <p class="mb-3">Alternatively, create a new bookmark manually, and paste the code below as the URL:</p>
+        <textarea id="bookmarklet-textarea" class="textarea export-area" readonly></textarea>
+        <div class="mt-3">
+          <button class="button is-info" onclick="copyToClipboard(document.getElementById('bookmarklet-textarea').value)">
+            Copy Code
+          </button>
+          <button class="button is-light ml-2" onclick="switchView('builder')">Back to Builder</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- Data Layer ---
+    const DB_KEY = 'docmagic_templates';
+    let currentTemplate = null;
+    let templates = [];
+
+    function loadTemplates() {
+      try { templates = JSON.parse(localStorage.getItem(DB_KEY)) || []; } 
+      catch (e) { templates = []; }
+    }
+
+    function saveTemplates() {
+      localStorage.setItem(DB_KEY, JSON.stringify(templates));
+    }
+
+    function generateId() {
+      return Date.now().toString(36) + Math.random().toString(36).substr(2);
+    }
+
+    // --- UI/Routing Layer ---
+    let editor;
+
+    function initEditor() {
+      if(!editor) {
+        editor = Jodit.make('#jodit-editor', {
+          buttons: "source,|,bold,italic,underline,strikethrough,|,ul,ol,|,outdent,indent,|,font,fontsize,brush,paragraph,|,image,table,link,|,align,undo,redo,|,hr,eraser,copyformat",
+          toolbarSticky: true,
+          toolbarStickyOffset: 65,
+          uploader: { insertImageAsBase64URI: true }, // Keep images local and stateless
+          minHeight: 800,
+          showCharsCounter: false,
+          showWordsCounter: false,
+          showXPathInStatusbar: false,
+          allowTabNavigation: true
+        });
+        
+        editor.events.on('change', () => {
+          if(currentTemplate) currentTemplate.htmlContent = editor.value;
+          autoSave();
+        });
+      }
+    }
+
+    function switchView(viewId) {
+      document.querySelectorAll('.page-view').forEach(v => v.classList.remove('is-active'));
+      document.getElementById('view-' + viewId).classList.add('is-active');
+      if(viewId === 'dashboard') {
+        currentTemplate = null;
+        renderDashboard();
+      }
+    }
+
+    function renderDashboard() {
+      loadTemplates();
+      const tbody = document.getElementById('dashboard-table-body');
+      const emptyState = document.getElementById('dashboard-empty');
+      tbody.innerHTML = '';
+      if(templates.length === 0) {
+        emptyState.classList.remove('is-hidden');
+      } else {
+        emptyState.classList.add('is-hidden');
+        templates.forEach(t => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td><strong>${t.name || 'Untitled Document'}</strong></td>
+            <td><span class="tag is-info is-light">${t.variables.length}</span></td>
+            <td>${new Date(t.updatedAt).toLocaleDateString()}</td>
+            <td class="has-text-right">
+              <button class="button is-small is-primary is-light" onclick="editTemplate('${t.id}')"><i class="fa-solid fa-pen"></i></button>
+              <button class="button is-small is-danger is-light" onclick="deleteTemplate('${t.id}')"><i class="fa-solid fa-trash"></i></button>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      }
+    }
+
+    function createNewTemplate() {
+      currentTemplate = {
+        id: generateId(),
+        name: 'New Document Template',
+        variables: [],
+        htmlContent: '<h1>New Document</h1><p>Start typing here...</p>',
+        updatedAt: Date.now()
+      };
+      templates.push(currentTemplate);
+      saveTemplates();
+      openBuilder(currentTemplate);
+    }
+
+    function deleteTemplate(id) {
+      if(confirm('Are you sure you want to delete this template?')) {
+        templates = templates.filter(t => t.id !== id);
+        saveTemplates();
+        renderDashboard();
+      }
+    }
+
+    function editTemplate(id) {
+      currentTemplate = templates.find(t => t.id === id);
+      if(currentTemplate) openBuilder(currentTemplate);
+    }
+
+    function openBuilder(template) {
+      initEditor();
+      document.getElementById('template-name').value = template.name;
+      editor.value = template.htmlContent || '';
+      renderVariables();
+      switchView('builder');
+    }
+
+    document.getElementById('template-name').addEventListener('input', (e) => {
+      if(currentTemplate) currentTemplate.name = e.target.value;
+      autoSave();
+    });
+
+    let saveTimeout;
+    function autoSave() {
+      clearTimeout(saveTimeout);
+      saveTimeout = setTimeout(() => {
+        if(currentTemplate) {
+          currentTemplate.updatedAt = Date.now();
+          saveTemplates();
+        }
+      }, 500);
+    }
+
+    // --- Variables Management ---
+    document.getElementById('add-var-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const nameInput = document.getElementById('new-var-name');
+      const typeInput = document.getElementById('new-var-type');
+      const name = nameInput.value.trim();
+      const type = typeInput.value;
+      
+      if(!name) return;
+      if(currentTemplate.variables.some(v => v.name === name)) {
+        alert('Variable name already exists');
+        return;
+      }
+      
+      currentTemplate.variables.push({ id: generateId(), name, type });
+      nameInput.value = '';
+      autoSave();
+      renderVariables();
+    });
+
+    function removeVariable(id) {
+      currentTemplate.variables = currentTemplate.variables.filter(v => v.id !== id);
+      autoSave();
+      renderVariables();
+    }
+
+    function renderVariables() {
+      const list = document.getElementById('variables-list');
+      list.innerHTML = '';
+      currentTemplate.variables.forEach(v => {
+        const div = document.createElement('div');
+        div.className = 'variable-card';
+        
+        let icon = 'fa-font';
+        if(v.type === 'longtext') icon = 'fa-align-left';
+        if(v.type === 'date') icon = 'fa-calendar';
+        if(v.type === 'signature') icon = 'fa-signature';
+
+        div.innerHTML = `
+          <div>
+            <div class="is-flex is-align-items-center mb-1">
+              <i class="fa-solid ${icon} has-text-grey-light mr-2 is-size-7"></i>
+              <strong>${v.name}</strong>
+            </div>
+            <span class="var-syntax" onclick="copyToClipboard('{{${v.name}}}')" title="Click to copy to clipboard">{{${v.name}}}</span>
+          </div>
+          <button class="delete is-small" onclick="removeVariable('${v.id}')"></button>
+        `;
+        list.appendChild(div);
+      });
+    }
+
+    function copyToClipboard(text) {
+      navigator.clipboard.writeText(text).then(() => {
+        // Minimal feedback
+      }).catch(err => alert("Failed to copy! " + err));
+    }
+
+    // --- Preview / Export Compiler ---
+    function goToExport() {
+      if(!currentTemplate) return;
+      
+      const payloadString = generateBookmarkletEngine(currentTemplate);
+      const urlEncoded = "javascript:" + encodeURIComponent(`(function(){${payloadString}})();`);
+      
+      document.getElementById('bookmarklet-textarea').value = urlEncoded;
+      document.getElementById('bookmarklet-link').href = urlEncoded;
+      document.getElementById('bookmarklet-name').textContent = currentTemplate.name ? currentTemplate.name : "Generate Template";
+      
+      switchView('export');
+    }
+    
+    function previewTemplate() {
+      if(!currentTemplate) return;
+      const engineCode = generateBookmarkletEngine(currentTemplate);
+      try {
+        const previewFunc = new Function(engineCode);
+        previewFunc();
+      } catch (err) {
+        alert("Error generating preview: " + err.message);
+      }
+    }
+
+    function generateBookmarkletEngine(config) {
+      // The Engine logic executed by the target website
+      return `
+        try {
+          var config = ${JSON.stringify(config)};
+          
+          if(document.getElementById('docmagic-overlay')) {
+             document.body.removeChild(document.getElementById('docmagic-overlay'));
+          }
+
+          var overlay = document.createElement('div');
+          overlay.id = 'docmagic-overlay';
+          overlay.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.6);z-index:2147483647;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;backdrop-filter:blur(2px);';
+          
+          var modal = document.createElement('div');
+          modal.style.cssText = 'background:white;padding:30px;border-radius:12px;width:500px;max-width:90%;max-height:90vh;overflow-y:auto;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);';
+          
+          var htmlForm = '<h2 style="margin-top:0;font-size:24px;color:#111;margin-bottom:20px;border-bottom:1px solid #eee;padding-bottom:10px;">' + config.name + '</h2>';
+          htmlForm += '<form id="docmagic-form">';
+          
+          window._docmagicToggleSig = function(name, mode) {
+            document.getElementById('panel-draw-'+name).style.display = mode === 'draw' ? 'block' : 'none';
+            document.getElementById('panel-type-'+name).style.display = mode === 'type' ? 'block' : 'none';
+          };
+
+          config.variables.forEach(function(v) {
+            htmlForm += '<div style="margin-bottom:18px;">';
+            htmlForm += '<label style="display:block;margin-bottom:6px;font-weight:600;color:#333;font-size:14px;">' + v.name + '</label>';
+            
+            if (v.type === 'longtext') {
+              htmlForm += '<textarea name="'+v.name+'" style="width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;min-height:80px;font-family:inherit;font-size:14px;" required></textarea>';
+            
+            } else if (v.type === 'signature') {
+              htmlForm += '<div style="border:1px solid #ccc;border-radius:6px;padding:12px;background:#fafafa;">';
+              
+              // Tabs for Draw / Type
+              htmlForm += '<div style="margin-bottom:10px; padding-bottom:10px; border-bottom:1px solid #eaeaea; font-size:13px;">';
+              htmlForm += '<label style="margin-right:15px; cursor:pointer;"><input type="radio" name="sig-mode-'+v.name+'" value="draw" checked onchange="window._docmagicToggleSig(\\''+v.name+'\\', \\'draw\\')"> Draw Signature</label>';
+              htmlForm += '<label style="cursor:pointer;"><input type="radio" name="sig-mode-'+v.name+'" value="type" onchange="window._docmagicToggleSig(\\''+v.name+'\\', \\'type\\')"> Type Signature</label>';
+              htmlForm += '</div>';
+              
+              // Draw Panel
+              htmlForm += '<div id="panel-draw-'+v.name+'">';
+              htmlForm += '<canvas id="sig-'+v.name+'" width="400" height="150" style="border:1px solid #bbb;cursor:crosshair;background:#fff;width:100%;border-radius:4px;touch-action:none;"></canvas>';
+              htmlForm += '<div style="margin-top:8px;text-align:right;"><button type="button" onclick="document.getElementById(\\'sig-'+v.name+'\\').getContext(\\'2d\\').clearRect(0,0,400,150); document.getElementById(\\'input-sig-'+v.name+'\\').value=\\'\\';" style="padding:4px 10px;font-size:12px;background:#e2e8f0;border:none;border-radius:4px;cursor:pointer;">Clear Canvas</button></div>';
+              htmlForm += '</div>';
+
+              // Type Panel
+              htmlForm += '<div id="panel-type-'+v.name+'" style="display:none;">';
+              htmlForm += '<input type="text" id="type-text-'+v.name+'" placeholder="Type your name..." style="width:100%; padding:10px; border:1px solid #bbb; border-radius:4px; font-family:\\'Brush Script MT\\', \\'Caveat\\', cursive; font-size:32px; text-align:center; height:150px; background:#fff; box-sizing:border-box;">';
+              htmlForm += '</div>';
+
+              htmlForm += '<input type="hidden" name="'+v.name+'" id="input-sig-'+v.name+'" required value="">';
+              htmlForm += '</div>';
+            
+            } else {
+              htmlForm += '<input type="'+(v.type==='date'?'date':'text')+'" name="'+v.name+'" style="width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;font-family:inherit;font-size:14px;box-sizing:border-box;" required>';
+            }
+            htmlForm += '</div>';
+          });
+          
+          htmlForm += '<div style="margin-top:30px;display:flex;justify-content:flex-end;gap:12px;">';
+          htmlForm += '<button type="button" id="docmagic-cancel" style="padding:10px 18px;background:#f1f5f9;color:#475569;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:14px;">Cancel</button>';
+          htmlForm += '<button type="submit" style="padding:10px 18px;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:14px;box-shadow:0 4px 6px -1px rgba(59,130,246,0.3);">Generate PDF</button>';
+          htmlForm += '</div></form>';
+          
+          modal.innerHTML = htmlForm;
+          overlay.appendChild(modal);
+          document.body.appendChild(overlay);
+          
+          // Setup Canvas Interactions
+          config.variables.forEach(function(v) {
+            if (v.type === 'signature') {
+              var canvas = document.getElementById('sig-'+v.name);
+              var ctx = canvas.getContext('2d');
+              var isDrawing = false;
+              
+              function getPos(e) {
+                var rect = canvas.getBoundingClientRect();
+                var clientX = e.clientX || (e.touches && e.touches[0].clientX);
+                var clientY = e.clientY || (e.touches && e.touches[0].clientY);
+                var scaleX = canvas.width / rect.width;
+                var scaleY = canvas.height / rect.height;
+                return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+              }
+
+              function start(e) { 
+                e.preventDefault();
+                isDrawing = true; 
+                var pos = getPos(e);
+                ctx.beginPath();
+                ctx.moveTo(pos.x, pos.y);
+              }
+              function end(e) { 
+                if(!isDrawing) return;
+                isDrawing = false; 
+                ctx.beginPath(); 
+                document.getElementById('input-sig-'+v.name).value = "drawn"; 
+              }
+              function draw(e) {
+                if (!isDrawing) return;
+                e.preventDefault();
+                ctx.lineWidth = 3;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.strokeStyle = '#000000';
+                
+                var pos = getPos(e);
+                ctx.lineTo(pos.x, pos.y);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(pos.x, pos.y);
+              }
+              
+              canvas.addEventListener('mousedown', start, {passive: false});
+              canvas.addEventListener('mouseup', end);
+              canvas.addEventListener('mousemove', draw, {passive: false});
+              canvas.addEventListener('mouseout', end);
+              
+              canvas.addEventListener('touchstart', start, {passive: false});
+              canvas.addEventListener('touchend', end);
+              canvas.addEventListener('touchmove', draw, {passive: false});
+            }
+          });
+          
+          document.getElementById('docmagic-cancel').addEventListener('click', function() {
+            document.body.removeChild(overlay);
+          });
+          
+          document.getElementById('docmagic-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            var formData = new FormData(e.target);
+            var finalHtml = config.htmlContent || "";
+            
+            config.variables.forEach(function(v) {
+              var val = formData.get(v.name) || "";
+              
+              if (v.type === 'signature') {
+                 var modeRadios = e.target.elements['sig-mode-'+v.name];
+                 var activeMode = 'draw';
+                 if(modeRadios && modeRadios.length) {
+                     for(var i=0; i<modeRadios.length; i++) {
+                         if(modeRadios[i].checked) { activeMode = modeRadios[i].value; break; }
+                     }
+                 } else if (modeRadios && modeRadios.checked) {
+                     activeMode = modeRadios.value;
+                 }
+                 
+                 if (activeMode === 'draw') {
+                     var canvas = document.getElementById('sig-'+v.name);
+                     var blank = document.createElement('canvas');
+                     blank.width = canvas.width; blank.height = canvas.height;
+                     if(canvas.toDataURL() == blank.toDataURL()){
+                         val = ""; 
+                     } else {
+                         val = '<img src="'+canvas.toDataURL()+'" style="max-height:80px; max-width:100%;">';
+                     }
+                 } else if (activeMode === 'type') {
+                     var textString = document.getElementById('type-text-'+v.name).value.trim();
+                     if(textString) {
+                         var tCanvas = document.createElement('canvas');
+                         tCanvas.width = 400; tCanvas.height = 150;
+                         var tCtx = tCanvas.getContext('2d');
+                         tCtx.fillStyle = '#ffffff';
+                         tCtx.fillRect(0,0,400,150);
+                         
+                         // Draw Text
+                         tCtx.font = "italic 48px 'Brush Script MT', 'Caveat', 'Segoe Script', cursive";
+                         tCtx.fillStyle = '#000000';
+                         tCtx.textAlign = 'center';
+                         tCtx.textBaseline = 'middle';
+                         tCtx.fillText(textString, 200, 75);
+                         
+                         val = '<img src="'+tCanvas.toDataURL()+'" style="max-height:80px; max-width:100%;">';
+                     } else {
+                         val = "";
+                     }
+                 }
+              } else {
+                 val = String(val).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\\n/g, '<br>');
+              }
+              var regex = new RegExp('\\\\{\\\\{'+v.name+'\\\\}\\\\}', 'g');
+              finalHtml = finalHtml.replace(regex, val);
+            });
+            
+            // Apply inline CSS directly to elements to bypass strict CRM Content Security Policies (CSPs) that block <style>
+            finalHtml = finalHtml.replace(/<p([^>]*)>/gi, '<p$1 style="margin-top:0; margin-bottom:1em; line-height:1.5;">')
+                                 .replace(/<table([^>]*)>/gi, '<table$1 style="width:100%; border-collapse:collapse; margin-bottom:1em;">')
+                                 .replace(/<th([^>]*)>/gi, '<th$1 style="border:1px solid #ccc; padding:8px; text-align:left; background:#f9f9f9;">')
+                                 .replace(/<td([^>]*)>/gi, '<td$1 style="border:1px solid #ccc; padding:8px;">')
+                                 .replace(/<ul([^>]*)>/gi, '<ul$1 style="margin-top:0; margin-bottom:1em; padding-left:40px;">')
+                                 .replace(/<ol([^>]*)>/gi, '<ol$1 style="margin-top:0; margin-bottom:1em; padding-left:40px;">')
+                                 .replace(/<li([^>]*)>/gi, '<li$1 style="margin-bottom:0.5em;">')
+                                 .replace(/<h([1-6])([^>]*)>/gi, '<h$1$2 style="margin-top:0; margin-bottom:0.5em; line-height:1.2;">')
+                                 .replace(/<img([^>]*)>/gi, '<img$1 style="max-width:100%; height:auto;">');
+
+            // Constructing an 8.5x11 "Page" representation for the preview tab
+            // This ensures it LOOKS like a padded page on the screen before the print dialog fires.
+            var wrapperStyles = "id=\\'docmagic-page\\' style=\\'max-width: 816px; margin: 40px auto; padding: 1in; background: white; box-shadow: 0 10px 30px rgba(0,0,0,0.2); box-sizing: border-box; font-family: \"Times New Roman\", serif; font-size: 16px; color: #000; line-height: 1.5;\\'";
+            finalHtml = "<div " + wrapperStyles + ">" + finalHtml + "</div>";
+
+            document.body.removeChild(overlay);
+            
+            var printWin = window.open('', '_blank');
+            if(!printWin) {
+                alert("Popup blocker prevented opening the print window! Please allow popups for this site and try again.");
+                return;
+            }
+            
+            var doc = printWin.document;
+            doc.open();
+            
+            var printCSS = '@page { margin: 1in; size: letter; }';
+            doc.write('<html><head><title>' + (config.name || 'Document') + '</title><style>' + printCSS + '</style></head><body style="margin:0; padding:0; background-color: #525659;">' + finalHtml + '</body></html>');
+            doc.close();
+            
+            // Strip the 8.5x11 visual container padding and shadows instantly before the native print spooler grabs the DOM.
+            // This guarantees the printed PDF uses pure fluid width and relies on @page / browser default 1in margins without double-padding!
+            printWin.onbeforeprint = function() {
+                var pageDiv = doc.getElementById('docmagic-page');
+                if (pageDiv) {
+                    pageDiv.style.boxShadow = 'none';
+                    pageDiv.style.margin = '0';
+                    pageDiv.style.padding = '0';
+                    pageDiv.style.maxWidth = '100%';
+                }
+                doc.body.style.backgroundColor = 'white';
+            };
+            
+            // Modern browsers un-pause javascript the millisecond the print dialog resolves (Cancel or Print).
+            printWin.onafterprint = function() {
+                printWin.close();
+            };
+            
+            setTimeout(function() {
+              printWin.focus();
+              printWin.print();
+              // Fallback close just in case onafterprint doesn't fire fast enough
+              setTimeout(function(){ printWin.close(); }, 500);
+            }, 500);
+          });
+          
+        } catch(err) {
+          alert('TemplateDoc Error: ' + err.message);
+        }
+      `;
+    }
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+      renderDashboard();
+    });
+  </script>
+</body>
+</html>
