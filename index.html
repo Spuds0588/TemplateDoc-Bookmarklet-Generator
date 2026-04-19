@@ -114,8 +114,8 @@
         </div>
         <div class="level-right">
           <button class="button is-light mr-2" onclick="switchView('dashboard')">Back</button>
-          <button class="button is-info mr-2" onclick="previewTemplate()">Preview</button>
-          <button class="button is-success" onclick="goToExport()">Generate Bookmarklet</button>
+          <button class="button is-info mr-2" onclick="previewTemplate()" id="btn-preview">Preview</button>
+          <button class="button is-success" onclick="goToExport()" id="btn-generate">Generate Bookmarklet</button>
         </div>
       </div>
     </div>
@@ -197,6 +197,7 @@
     const DB_KEY = 'docmagic_templates';
     let currentTemplate = null;
     let templates = [];
+    let bundledPdfLibrary = null; // Cache to prevent re-fetching
 
     function loadTemplates() {
       try { templates = JSON.parse(localStorage.getItem(DB_KEY)) || []; } 
@@ -378,27 +379,62 @@
     }
 
     // --- Preview / Export Compiler ---
-    function goToExport() {
+    
+    async function fetchPdfLibrary() {
+        if (bundledPdfLibrary) return bundledPdfLibrary;
+        const res = await fetch("https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js");
+        bundledPdfLibrary = await res.text();
+        return bundledPdfLibrary;
+    }
+
+    async function goToExport() {
       if(!currentTemplate) return;
       
-      const payloadString = generateBookmarkletEngine(currentTemplate);
-      const urlEncoded = "javascript:" + encodeURIComponent(`(function(){${payloadString}})();`);
+      const btn = document.getElementById('btn-generate');
+      const originalText = btn.innerText;
+      btn.innerText = "Bundling Library...";
+      btn.disabled = true;
       
-      document.getElementById('bookmarklet-textarea').value = urlEncoded;
-      document.getElementById('bookmarklet-link').href = urlEncoded;
-      document.getElementById('bookmarklet-name').textContent = currentTemplate.name ? currentTemplate.name : "Generate Template";
-      
-      switchView('export');
+      try {
+        const libCode = await fetchPdfLibrary();
+        const payloadString = generateBookmarkletEngine(currentTemplate);
+        
+        // Wrap everything into the self-executing Bookmarklet function
+        // Note: We dump libCode seamlessly into the IIFE scope to avoid CSP dependency blocking
+        const urlEncoded = "javascript:" + encodeURIComponent(`(function(){ \n${libCode} \n ${payloadString} \n})();`);
+        
+        document.getElementById('bookmarklet-textarea').value = urlEncoded;
+        document.getElementById('bookmarklet-link').href = urlEncoded;
+        document.getElementById('bookmarklet-name').textContent = currentTemplate.name ? currentTemplate.name : "Generate Template";
+        
+        switchView('export');
+      } catch (err) {
+        alert("Failed to bundle PDF library: " + err.message);
+      } finally {
+        btn.innerText = originalText;
+        btn.disabled = false;
+      }
     }
     
-    function previewTemplate() {
+    async function previewTemplate() {
       if(!currentTemplate) return;
-      const engineCode = generateBookmarkletEngine(currentTemplate);
+      const btn = document.getElementById('btn-preview');
+      const originalText = btn.innerText;
+      btn.innerText = "Loading...";
+      btn.disabled = true;
+      
       try {
-        const previewFunc = new Function(engineCode);
-        previewFunc();
+          const libCode = await fetchPdfLibrary();
+          const engineCode = generateBookmarkletEngine(currentTemplate);
+          
+          // Execute safely with the bundled library
+          const previewFunc = new Function(` ${libCode} \n ${engineCode} `);
+          previewFunc();
       } catch (err) {
-        alert("Error generating preview: " + err.message);
+          alert("Error generating preview: " + err.message);
+      } finally {
+          btn.innerText = originalText;
+          btn.disabled = false;
       }
     }
 
@@ -465,7 +501,7 @@
           
           htmlForm += '<div style="margin-top:30px;display:flex;justify-content:flex-end;gap:12px;">';
           htmlForm += '<button type="button" id="docmagic-cancel" style="padding:10px 18px;background:#f1f5f9;color:#475569;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:14px;">Cancel</button>';
-          htmlForm += '<button type="submit" style="padding:10px 18px;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:14px;box-shadow:0 4px 6px -1px rgba(59,130,246,0.3);">Generate PDF</button>';
+          htmlForm += '<button type="submit" id="docmagic-submit-btn" style="padding:10px 18px;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:14px;box-shadow:0 4px 6px -1px rgba(59,130,246,0.3);">Generate PDF</button>';
           htmlForm += '</div></form>';
           
           modal.innerHTML = htmlForm;
@@ -533,6 +569,11 @@
           
           document.getElementById('docmagic-form').addEventListener('submit', function(e) {
             e.preventDefault();
+            
+            var submitBtn = document.getElementById('docmagic-submit-btn');
+            submitBtn.innerText = "Processing...";
+            submitBtn.disabled = true;
+
             var formData = new FormData(e.target);
             var finalHtml = config.htmlContent || "";
             
@@ -587,7 +628,7 @@
               finalHtml = finalHtml.replace(regex, val);
             });
             
-            // Apply inline CSS directly to elements to bypass strict CRM Content Security Policies (CSPs) that block <style>
+            // Apply strict inline CSS directly to elements so the PDF rendering ignores local CRM global stylesheets
             finalHtml = finalHtml.replace(/<p([^>]*)>/gi, '<p$1 style="margin-top:0; margin-bottom:1em; line-height:1.5;">')
                                  .replace(/<table([^>]*)>/gi, '<table$1 style="width:100%; border-collapse:collapse; margin-bottom:1em;">')
                                  .replace(/<th([^>]*)>/gi, '<th$1 style="border:1px solid #ccc; padding:8px; text-align:left; background:#f9f9f9;">')
@@ -598,50 +639,31 @@
                                  .replace(/<h([1-6])([^>]*)>/gi, '<h$1$2 style="margin-top:0; margin-bottom:0.5em; line-height:1.2;">')
                                  .replace(/<img([^>]*)>/gi, '<img$1 style="max-width:100%; height:auto;">');
 
-            // Constructing an 8.5x11 "Page" representation for the preview tab
-            // This ensures it LOOKS like a padded page on the screen before the print dialog fires.
-            var wrapperStyles = "id=\\'docmagic-page\\' style=\\'max-width: 816px; margin: 40px auto; padding: 1in; background: white; box-shadow: 0 10px 30px rgba(0,0,0,0.2); box-sizing: border-box; font-family: \"Times New Roman\", serif; font-size: 16px; color: #000; line-height: 1.5;\\'";
-            finalHtml = "<div " + wrapperStyles + ">" + finalHtml + "</div>";
-
             document.body.removeChild(overlay);
             
-            var printWin = window.open('', '_blank');
-            if(!printWin) {
-                alert("Popup blocker prevented opening the print window! Please allow popups for this site and try again.");
-                return;
+            // Build an unattached HTML string matching an pristine 8.5x11 layout for html2pdf.
+            // By passing a string directly, html2pdf natively clones it into its own unclipped rendering iframe so it doesn't get excluded as an off-screen element.
+            var wrapperStyles = 'width:816px; padding:1in; box-sizing:border-box; background:white; color:black; font-family:Times New Roman, serif; font-size:16px; line-height:1.5; text-align:left; display:block;';
+            var printHtml = '<div style="' + wrapperStyles + '">' + finalHtml + '</div>';
+            
+            var opt = {
+              margin:       0, // margins are handled by our 1in CSS padding on the internal container
+              filename:     (config.name ? config.name : 'Document') + '.pdf',
+              image:        { type: 'jpeg', quality: 0.98 },
+              // scrollY: 0 and scrollX: 0 are critical! If the CRM is scrolled, html2canvas offsets the capture and creates cascading blank cutoffs!
+              html2canvas:  { scale: 2, useCORS: true, logging: false, scrollY: 0, scrollX: 0, windowWidth: 816 },
+              jsPDF:        { unit: 'in', format: 'letter', orientation: 'portrait' },
+              pagebreak:    { mode: 'avoid-all' } // Prevents elements from being sliced cleanly in half across PDF pages
+            };
+            
+            try {
+                window.html2pdf().set(opt).from(printHtml).save().catch(function(err){
+                     alert("PDF Generation Engine Error: " + err.message);
+                });
+            } catch(libraryErr) {
+                alert("Library not attached properly: " + libraryErr.message);
             }
             
-            var doc = printWin.document;
-            doc.open();
-            
-            var printCSS = '@page { margin: 1in; size: letter; }';
-            doc.write('<html><head><title>' + (config.name || 'Document') + '</title><style>' + printCSS + '</style></head><body style="margin:0; padding:0; background-color: #525659;">' + finalHtml + '</body></html>');
-            doc.close();
-            
-            // Strip the 8.5x11 visual container padding and shadows instantly before the native print spooler grabs the DOM.
-            // This guarantees the printed PDF uses pure fluid width and relies on @page / browser default 1in margins without double-padding!
-            printWin.onbeforeprint = function() {
-                var pageDiv = doc.getElementById('docmagic-page');
-                if (pageDiv) {
-                    pageDiv.style.boxShadow = 'none';
-                    pageDiv.style.margin = '0';
-                    pageDiv.style.padding = '0';
-                    pageDiv.style.maxWidth = '100%';
-                }
-                doc.body.style.backgroundColor = 'white';
-            };
-            
-            // Modern browsers un-pause javascript the millisecond the print dialog resolves (Cancel or Print).
-            printWin.onafterprint = function() {
-                printWin.close();
-            };
-            
-            setTimeout(function() {
-              printWin.focus();
-              printWin.print();
-              // Fallback close just in case onafterprint doesn't fire fast enough
-              setTimeout(function(){ printWin.close(); }, 500);
-            }, 500);
           });
           
         } catch(err) {
